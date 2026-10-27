@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: wenclips-engine
+    runtime: docker
+    dockerfilePath: ./engine/Dockerfile
+    dockerContext: ./engine
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://wen-gerador-de-shorts.vercel.app,http://localhost:3000
+      - key: JOB_DIR
+        value: /tmp/wenclips
+      - key: WHISPER_MODEL
+        value: tiny
