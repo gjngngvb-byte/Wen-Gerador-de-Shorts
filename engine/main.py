@@ -64,7 +64,7 @@ def get_whisper_model():
     with _model_lock:
         if _model is None:
             from faster_whisper import WhisperModel
-            _model = WhisperModel(os.getenv("WHISPER_MODEL", "tiny"), device="cpu", compute_type="int8")
+            _model = WhisperModel(os.getenv("WHISPER_MODEL", "tiny"), device="cpu", compute_type="int8", cpu_threads=1, num_workers=1, download_root=os.getenv("WHISPER_MODEL_DIR", "/tmp/wenclips-model"))
         return _model
 
 
@@ -191,14 +191,14 @@ def ass_time(seconds: float) -> str:
 def make_ass(segments: list[dict[str, Any]], start: float, end: float, output: Path) -> None:
     header = """[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: 720
+PlayResY: 1280
 WrapStyle: 2
 ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,64,&H00FFFFFF,&H0000FFFF,&H00111111,&H90000000,1,0,0,0,100,100,0,0,1,4,1,2,90,90,210,1
+Style: Default,DejaVu Sans,46,&H00FFFFFF,&H0000FFFF,&H00111111,&H90000000,1,0,0,0,100,100,0,0,1,3,1,2,60,60,140,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -233,9 +233,9 @@ def render_clip(source: Path, folder: Path, index: int, clip: dict[str, Any], se
     ass = folder / f"captions_{index}.ass"
     make_ass(segments, start, end, ass)
     output = folder / f"wenclips_{index:02d}.mp4"
-    # Scale to fill 9:16, center-crop, burn Portuguese subtitles; no branding/watermark.
+    # Render 720p vertical to reduce peak memory on the free Render instance; no branding/watermark.
     escaped_ass = str(ass).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    vf = f"scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles='{escaped_ass}'"
+    vf = f"scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,subtitles='{escaped_ass}'"
     run([
         "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
         "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
