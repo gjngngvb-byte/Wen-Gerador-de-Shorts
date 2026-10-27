@@ -11,6 +11,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -155,6 +157,13 @@ def download_youtube(url: str, folder: Path) -> Path:
     finally:
         cookie_path.unlink(missing_ok=True)
 
+    # Optional external provider. Configure only an instance you own or are authorized to use.
+    try:
+        return download_via_cobalt(url, folder)
+    except Exception as exc:
+        failures.append(f"Cobalt API configurável: {str(exc)[-350:]}")
+        (folder / "source.mp4").unlink(missing_ok=True)
+
     # Second downloader implementation: pytubefix uses its own YouTube extraction code,
     # independent from yt-dlp. It may also be blocked by YouTube, so failure is expected
     # to fall through to the next method.
@@ -215,6 +224,78 @@ def download_youtube(url: str, folder: Path) -> Path:
         "Para este vídeo, use um arquivo que você tenha autorização para reutilizar "
         "ou um link direto de mídia autorizado. Detalhes: " + details
     )
+
+
+
+def download_via_cobalt(url: str, folder: Path) -> Path:
+    """Use an explicitly configured Cobalt-compatible API as an optional fallback."""
+    api_url = os.getenv("COBALT_API_URL", "").strip().rstrip("/")
+    if not api_url:
+        raise RuntimeError("COBALT_API_URL não configurado; provedor externo ignorado.")
+    parsed_api = urlparse(api_url)
+    if parsed_api.scheme != "https" or not parsed_api.hostname:
+        raise RuntimeError("COBALT_API_URL precisa ser uma URL HTTPS válida.")
+
+    payload = json.dumps({
+        "url": url, "videoQuality": "720", "youtubeVideoCodec": "h264",
+        "youtubeVideoContainer": "mp4", "downloadMode": "auto",
+        "filenameStyle": "basic", "alwaysProxy": True,
+    }).encode("utf-8")
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    api_key = os.getenv("COBALT_API_KEY", "").strip()
+    if api_key:
+        scheme = os.getenv("COBALT_AUTH_SCHEME", "Api-Key").strip() or "Api-Key"
+        headers["Authorization"] = f"{scheme} {api_key}"
+    request = Request(api_url + "/", data=payload, headers=headers, method="POST")
+    try:
+        with urlopen(request, timeout=35) as response:
+            response_data = response.read(1024 * 1024).decode("utf-8", errors="replace")
+    except (HTTPError, URLError, TimeoutError) as exc:
+        raise RuntimeError(f"API externa Cobalt indisponível: {str(exc)[:250]}") from exc
+
+    try:
+        result = json.loads(response_data)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("API externa retornou uma resposta que não é JSON.") from exc
+    status = result.get("status")
+    if status not in {"tunnel", "redirect"}:
+        error = result.get("error", {})
+        code = error.get("code", "resposta_sem_link") if isinstance(error, dict) else "resposta_sem_link"
+        raise RuntimeError(f"API externa não forneceu vídeo: {code}")
+    media_url = result.get("url")
+    if not isinstance(media_url, str):
+        raise RuntimeError("API externa não retornou o link do arquivo.")
+    parsed_media = urlparse(media_url)
+    if parsed_media.scheme != "https" or not parsed_media.hostname:
+        raise RuntimeError("O provedor retornou um link de mídia HTTPS inválido.")
+
+    target, temp = folder / "source.mp4", folder / "cobalt-download.tmp"
+    max_bytes = int(os.getenv("MAX_SOURCE_MB", "1024")) * 1024 * 1024
+    try:
+        media_request = Request(media_url, headers={"User-Agent": "WenClips/1.0"})
+        with urlopen(media_request, timeout=45) as response, temp.open("wb") as output:
+            content_type = response.headers.get("Content-Type", "").lower()
+            if "text/html" in content_type or "application/json" in content_type:
+                raise RuntimeError("O provedor retornou uma página de erro, não um vídeo.")
+            total = 0
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise RuntimeError(f"O vídeo excede o limite de {max_bytes // (1024 * 1024)} MB.")
+                output.write(chunk)
+        if temp.stat().st_size < 1_000_000:
+            raise RuntimeError("O provedor retornou um arquivo vazio ou incompleto.")
+        run(["ffmpeg", "-y", "-i", str(temp), "-c", "copy", "-movflags", "+faststart", str(target)], timeout=300)
+        probe_duration(target)
+        return target
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def probe_duration(source: Path) -> float:
