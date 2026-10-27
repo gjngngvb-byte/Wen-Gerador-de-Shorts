@@ -103,7 +103,10 @@ def download_youtube(url: str, folder: Path) -> Path:
         ("cliente android_vr", "youtube:player_client=android_vr", False),
     ]
 
-    cookies_b64 = os.getenv("YOUTUBE_COOKIES_BASE64", "").strip()
+    # Account cookies frequently expire and can make public-video downloads worse.
+    # Ignore any configured cookie blob unless an operator explicitly opts in.
+    use_account_cookies = os.getenv("YOUTUBE_USE_COOKIES", "").strip().lower() in {"1", "true", "yes"}
+    cookies_b64 = os.getenv("YOUTUBE_COOKIES_BASE64", "").strip() if use_account_cookies else ""
     cookie_path = folder / "youtube-cookies.txt"
     if cookies_b64:
         try:
