@@ -250,7 +250,15 @@ def download_via_cobalt(url: str, folder: Path) -> Path:
     try:
         with urlopen(request, timeout=35) as response:
             response_data = response.read(1024 * 1024).decode("utf-8", errors="replace")
-    except (HTTPError, URLError, TimeoutError) as exc:
+    except HTTPError as exc:
+        # Preserve the provider's response body so API errors (e.g. 400) are diagnosable.
+        try:
+            detail = exc.read(1200).decode("utf-8", errors="replace").replace("\\n", " ")[:700]
+        except Exception:
+            detail = ""
+        suffix = f": {detail}" if detail else ""
+        raise RuntimeError(f"API externa Cobalt HTTP {exc.code}{suffix}") from exc
+    except (URLError, TimeoutError) as exc:
         raise RuntimeError(f"API externa Cobalt indisponível: {str(exc)[:250]}") from exc
 
     try:
