@@ -79,7 +79,7 @@ def download_youtube(url: str, folder: Path) -> Path:
     validate_youtube_url(url)
     output_template = str(folder / "source.%(ext)s")
     run([
-        "yt-dlp", "--no-playlist", "--restrict-filenames",
+        "yt-dlp", "--js-runtimes", "node", "--no-playlist", "--restrict-filenames",
         "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "--merge-output-format", "mp4", "--max-filesize", "1G",
         "--output", output_template, url,
