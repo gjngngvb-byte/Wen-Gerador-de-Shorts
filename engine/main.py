@@ -24,6 +24,8 @@ MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_MB", "500")) * 1024 * 1024
 MAX_CLIPS = 5
 jobs: dict[str, dict[str, Any]] = {}
 jobs_lock = threading.Lock()
+# One CPU/memory-heavy job at a time on Render's 512 MiB free instance.
+worker_lock = threading.Lock()
 _model = None
 _model_lock = threading.Lock()
 
@@ -82,41 +84,80 @@ def validate_youtube_url(url: str) -> str:
 def download_youtube(url: str, folder: Path) -> Path:
     validate_youtube_url(url)
     output_template = str(folder / "source.%(ext)s")
-    command = [
+    common = [
         "yt-dlp", "--js-runtimes", "deno", "--remote-components", "ejs:github",
         "--no-playlist", "--restrict-filenames",
-        "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
+        # Limit source resolution as well as output resolution to reduce disk/CPU pressure.
+        "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
         "--merge-output-format", "mp4", "--max-filesize", "1G",
+        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
+        "--extractor-retries", "2", "--retry-sleep", "linear=1:3",
         "--output", output_template,
     ]
-    # Optional authenticated session cookie file supplied through Render secret env var.
-    # Never commit cookie files or print their contents to logs.
+
+    # Try independent yt-dlp extraction profiles automatically. A stale cookie must
+    # never prevent a public video from being downloaded without authentication.
+    profiles: list[tuple[str, str | None, bool]] = [
+        ("padrão sem cookies", None, False),
+        ("cliente web_safari", "youtube:player_client=web_safari", False),
+        ("cliente android_vr", "youtube:player_client=android_vr", False),
+    ]
+
     cookies_b64 = os.getenv("YOUTUBE_COOKIES_BASE64", "").strip()
+    cookie_path = folder / "youtube-cookies.txt"
     if cookies_b64:
-        cookie_path = JOB_DIR / "youtube-cookies.txt"
         try:
             cookie_bytes = base64.b64decode(cookies_b64, validate=True)
             if not cookie_bytes or b" Netscape HTTP Cookie File" not in cookie_bytes[:200]:
-                raise ValueError("Formato de cookies inválido; exporte no formato Netscape.")
+                raise ValueError("Formato de cookies inválido.")
             cookie_path.write_bytes(cookie_bytes)
-        except Exception as exc:
-            raise RuntimeError("YOUTUBE_COOKIES_BASE64 está inválido. Configure uma exportação Netscape válida no segredo do servidor.") from exc
-        command.extend(["--cookies", str(cookie_path)])
-    command.append(url)
-    try:
-        run(command, timeout=1200)
-    finally:
-        if cookies_b64:
+            # Cookie-based attempt is last: stale account cookies can break otherwise
+            # accessible public downloads. Cookies are never written to logs.
+            profiles.append(("padrão com cookies", None, True))
+        except Exception:
             cookie_path.unlink(missing_ok=True)
-    candidates = [p for p in folder.glob("source.*") if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".m4v"}]
-    if not candidates:
-        raise RuntimeError("Não foi possível obter o vídeo. Confira se o link está acessível e se você tem autorização para baixá-lo.")
-    source = max(candidates, key=lambda p: p.stat().st_size)
-    normalized = folder / "source.mp4"
-    if source != normalized:
-        run(["ffmpeg", "-y", "-i", str(source), "-c", "copy", str(normalized)], timeout=600)
-        source.unlink(missing_ok=True)
-    return normalized
+
+    failures: list[str] = []
+    try:
+        for label, extractor_args, use_cookies in profiles:
+            # Remove partial files left by a failed attempt before trying another path.
+            for partial in folder.glob("source.*"):
+                if partial.is_file():
+                    partial.unlink(missing_ok=True)
+            command = list(common)
+            if extractor_args:
+                command.extend(["--extractor-args", extractor_args])
+            if use_cookies:
+                command.extend(["--cookies", str(cookie_path)])
+            command.append(url)
+            try:
+                run(command, timeout=900)
+                candidates = [
+                    p for p in folder.glob("source.*")
+                    if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".m4v"}
+                    and p.is_file() and p.stat().st_size > 0
+                ]
+                if not candidates:
+                    failures.append(f"{label}: o comando terminou sem gerar um arquivo.")
+                    continue
+                source = max(candidates, key=lambda p: p.stat().st_size)
+                normalized = folder / "source.mp4"
+                if source != normalized:
+                    run(["ffmpeg", "-y", "-i", str(source), "-c", "copy", str(normalized)], timeout=300)
+                    source.unlink(missing_ok=True)
+                return normalized
+            except Exception as exc:
+                # Keep concise diagnostics for the final user-facing job error.
+                failures.append(f"{label}: {str(exc)[-450:]}")
+    finally:
+        cookie_path.unlink(missing_ok=True)
+
+    details = " | ".join(failures[-4:])
+    raise RuntimeError(
+        "O download automático falhou após testar os métodos disponíveis. "
+        "O YouTube pode exigir um token de verificação, bloquear o IP do servidor "
+        "ou restringir este vídeo. " + details
+    )
 
 
 def probe_duration(source: Path) -> float:
@@ -237,8 +278,9 @@ def render_clip(source: Path, folder: Path, index: int, clip: dict[str, Any], se
     escaped_ass = str(ass).replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     vf = f"scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,subtitles='{escaped_ass}'"
     run([
-        "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
-        "-vf", vf, "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+        "ffmpeg", "-y", "-threads", "1", "-filter_threads", "1",
+        "-ss", f"{start:.3f}", "-i", str(source), "-t", f"{duration:.3f}",
+        "-vf", vf, "-c:v", "libx264", "-threads", "1", "-preset", "ultrafast", "-crf", "24",
         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "-pix_fmt", "yuv420p", str(output),
     ], timeout=1800)
     return output
@@ -271,27 +313,46 @@ def process_job(job_id: str, source: Path, folder: Path) -> None:
         source.unlink(missing_ok=True)
 
 
+def process_upload_job(job_id: str, source: Path, folder: Path) -> None:
+    with worker_lock:
+        process_job(job_id, source, folder)
+
+
 def new_job(source: Path, folder: Path, background: BackgroundTasks) -> dict[str, Any]:
     job_id = uuid.uuid4().hex
     with jobs_lock:
         jobs[job_id] = {"id": job_id, "status": "queued", "progress": 0, "message": "Na fila de processamento…", "clips": []}
-    background.add_task(process_job, job_id, source, folder)
+    background.add_task(process_upload_job, job_id, source, folder)
     return {"id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "WenClips Engine", "version": "0.1.0"}
+    def version_of(command: list[str]) -> str | None:
+        try:
+            return subprocess.run(command, capture_output=True, text=True, timeout=5, check=True).stdout.strip().splitlines()[0]
+        except Exception:
+            return None
+
+    return {
+        "ok": True,
+        "service": "WenClips Engine",
+        "version": "0.1.0",
+        "yt_dlp": version_of(["yt-dlp", "--version"]),
+        "deno": version_of(["deno", "--version"]),
+    }
 
 
 def process_url_job(job_id: str, url: str, folder: Path) -> None:
-    try:
-        set_job(job_id, status="downloading", progress=3, message="Obtendo o vídeo autorizado…")
-        source = download_youtube(url, folder)
-        process_job(job_id, source, folder)
-    except Exception as exc:
-        set_job(job_id, status="failed", progress=100, message="Não foi possível baixar ou processar o vídeo.", error=str(exc)[-1800:])
-        shutil.rmtree(folder, ignore_errors=True)
+    # Serialize downloads, transcription and rendering to avoid overlapping memory spikes.
+    with worker_lock:
+        try:
+            set_job(job_id, status="downloading", progress=3, message="Obtendo o vídeo autorizado…")
+            source = download_youtube(url, folder)
+            process_job(job_id, source, folder)
+        except Exception as exc:
+            set_job(job_id, status="failed", progress=100, message="Não foi possível baixar ou processar o vídeo.", error=str(exc)[-1800:])
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 @app.post("/api/jobs/url", status_code=202)
