@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -78,12 +79,32 @@ def validate_youtube_url(url: str) -> str:
 def download_youtube(url: str, folder: Path) -> Path:
     validate_youtube_url(url)
     output_template = str(folder / "source.%(ext)s")
-    run([
-        "yt-dlp", "--js-runtimes", "deno", "--remote-components", "ejs:github", "--no-playlist", "--restrict-filenames",
+    command = [
+        "yt-dlp", "--js-runtimes", "deno", "--remote-components", "ejs:github",
+        "--no-playlist", "--restrict-filenames",
         "--format", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
         "--merge-output-format", "mp4", "--max-filesize", "1G",
-        "--output", output_template, url,
-    ], timeout=1200)
+        "--output", output_template,
+    ]
+    # Optional authenticated session cookie file supplied through Render secret env var.
+    # Never commit cookie files or print their contents to logs.
+    cookies_b64 = os.getenv("YOUTUBE_COOKIES_BASE64", "").strip()
+    if cookies_b64:
+        cookie_path = JOB_DIR / "youtube-cookies.txt"
+        try:
+            cookie_bytes = base64.b64decode(cookies_b64, validate=True)
+            if not cookie_bytes or b" Netscape HTTP Cookie File" not in cookie_bytes[:200]:
+                raise ValueError("Formato de cookies inválido; exporte no formato Netscape.")
+            cookie_path.write_bytes(cookie_bytes)
+        except Exception as exc:
+            raise RuntimeError("YOUTUBE_COOKIES_BASE64 está inválido. Configure uma exportação Netscape válida no segredo do servidor.") from exc
+        command.extend(["--cookies", str(cookie_path)])
+    command.append(url)
+    try:
+        run(command, timeout=1200)
+    finally:
+        if cookies_b64:
+            cookie_path.unlink(missing_ok=True)
     candidates = [p for p in folder.glob("source.*") if p.suffix.lower() in {".mp4", ".mkv", ".webm", ".mov", ".m4v"}]
     if not candidates:
         raise RuntimeError("Não foi possível obter o vídeo. Confira se o link está acessível e se você tem autorização para baixá-lo.")
