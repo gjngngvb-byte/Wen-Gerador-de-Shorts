@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 yt-dlp[default]
 faster-whisper==1.1.1
+streamlink==8.6.2
