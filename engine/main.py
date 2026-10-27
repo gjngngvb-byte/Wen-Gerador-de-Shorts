@@ -152,6 +152,34 @@ def download_youtube(url: str, folder: Path) -> Path:
     finally:
         cookie_path.unlink(missing_ok=True)
 
+    # Second downloader implementation: pytubefix uses its own YouTube extraction code,
+    # independent from yt-dlp. It may also be blocked by YouTube, so failure is expected
+    # to fall through to the next method.
+    try:
+        from pytubefix import YouTube
+
+        yt = YouTube(url)
+        stream = (
+            yt.streams.filter(progressive=True, file_extension="mp4", resolution="720p").first()
+            or yt.streams.filter(progressive=True, file_extension="mp4", resolution="480p").first()
+            or yt.streams.filter(progressive=True, file_extension="mp4", resolution="360p").first()
+            or yt.streams.get_highest_resolution()
+        )
+        if stream is None:
+            raise RuntimeError("pytubefix não encontrou um formato de vídeo compatível.")
+        downloaded = Path(stream.download(output_path=str(folder), filename="source.mp4"))
+        if not downloaded.is_file() or downloaded.stat().st_size < 1_000_000:
+            raise RuntimeError("pytubefix não gerou um arquivo de vídeo válido.")
+        # Ensure a consistent filename even if the library changes the output path.
+        normalized = folder / "source.mp4"
+        if downloaded != normalized:
+            shutil.move(str(downloaded), str(normalized))
+        probe_duration(normalized)
+        return normalized
+    except Exception as exc:
+        failures.append(f"pytubefix: {str(exc)[-350:]}")
+        (folder / "source.mp4").unlink(missing_ok=True)
+
     # Final independent fallback: Streamlink's YouTube plugin supports live streams,
     # not ordinary YouTube VODs. Keep it bounded so a live stream cannot run forever.
     # This is a recording of an accessible live stream, not a way to bypass access controls.
