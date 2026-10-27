@@ -4,3 +4,4 @@ python-multipart==0.0.20
 yt-dlp[default]
 faster-whisper==1.1.1
 streamlink==8.6.2
+pytubefix==11.2.1
