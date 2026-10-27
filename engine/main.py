@@ -152,11 +152,37 @@ def download_youtube(url: str, folder: Path) -> Path:
     finally:
         cookie_path.unlink(missing_ok=True)
 
-    details = " | ".join(failures[-4:])
+    # Final independent fallback: Streamlink's YouTube plugin supports live streams,
+    # not ordinary YouTube VODs. Keep it bounded so a live stream cannot run forever.
+    # This is a recording of an accessible live stream, not a way to bypass access controls.
+    stream_path = folder / "source.ts"
+    try:
+        stream_path.unlink(missing_ok=True)
+        run([
+            "streamlink", "--stream-timeout", "30", "--stream-segment-timeout", "20",
+            "--stream-segmented-duration", "00:20:00",
+            "--output", str(stream_path), url, "best",
+        ], timeout=1250)
+        if not stream_path.is_file() or stream_path.stat().st_size < 1_000_000:
+            raise RuntimeError("Streamlink não encontrou uma transmissão ao vivo acessível.")
+        normalized = folder / "source.mp4"
+        run(["ffmpeg", "-y", "-i", str(stream_path), "-c", "copy", "-movflags", "+faststart", str(normalized)], timeout=300)
+        stream_path.unlink(missing_ok=True)
+        # Reject empty/invalid captures instead of passing broken media into Whisper.
+        probe_duration(normalized)
+        return normalized
+    except Exception as exc:
+        failures.append(f"Streamlink (transmissões ao vivo): {str(exc)[-350:]}")
+        stream_path.unlink(missing_ok=True)
+        (folder / "source.mp4").unlink(missing_ok=True)
+
+    details = " | ".join(failures[-5:])
     raise RuntimeError(
-        "O download automático falhou após testar os métodos disponíveis. "
-        "O YouTube pode exigir um token de verificação, bloquear o IP do servidor "
-        "ou restringir este vídeo. " + details
+        "Todos os métodos automáticos disponíveis falharam. "
+        "Streamlink é uma última tentativa apenas para transmissões ao vivo; "
+        "ele não oferece suporte a vídeos comuns sob demanda no YouTube. "
+        "Para este vídeo, use um arquivo que você tenha autorização para reutilizar "
+        "ou um link direto de mídia autorizado. Detalhes: " + details
     )
 
 
