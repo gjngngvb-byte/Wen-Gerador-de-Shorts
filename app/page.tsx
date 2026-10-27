@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ArrowDownToLine, ArrowRight, Captions, Check, Clapperboard, Clock3, FileVideo2, Link2, LoaderCircle, Scissors, Sparkles, Upload, WandSparkles, Download, AlertCircle } from "lucide-react";
+import { ArrowDownToLine, ArrowRight, Captions, Check, Clapperboard, FileVideo2, Link2, LoaderCircle, Scissors, Sparkles, Upload, WandSparkles, Download, AlertCircle } from "lucide-react";
 
 type Clip = { name: string; url: string; start: number; end: number; duration: number };
 type Job = { id: string; status: string; progress: number; message: string; error?: string; clips?: Clip[] };
