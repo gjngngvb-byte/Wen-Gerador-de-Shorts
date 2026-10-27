@@ -89,11 +89,14 @@ def download_youtube(url: str, folder: Path) -> Path:
     common = [
         "yt-dlp", "--js-runtimes", "deno", "--remote-components", "ejs:github",
         "--no-playlist", "--restrict-filenames",
+        # Render datacenter IPs are frequently challenged; use IPv4 and lower request rate.
+        "--force-ipv4", "--sleep-requests", "1",
+        "--sleep-interval", "5", "--max-sleep-interval", "10",
         # Limit source resolution as well as output resolution to reduce disk/CPU pressure.
         "--format", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
         "--merge-output-format", "mp4", "--max-filesize", "1G",
-        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
-        "--extractor-retries", "2", "--retry-sleep", "linear=1:3",
+        "--socket-timeout", "30", "--retries", "3", "--fragment-retries", "3",
+        "--extractor-retries", "3", "--retry-sleep", "linear=2:5",
         "--output", output_template,
     ]
 
@@ -101,6 +104,9 @@ def download_youtube(url: str, folder: Path) -> Path:
     # never prevent a public video from being downloaded without authentication.
     profiles: list[tuple[str, str | None, bool]] = [
         ("padrão sem cookies", None, False),
+        # Try clients that currently use different YouTube playback paths.
+        ("cliente tv + web_safari", "youtube:player_client=tv,web_safari", False),
+        ("cliente ios", "youtube:player_client=ios", False),
         ("cliente web_safari", "youtube:player_client=web_safari", False),
         ("cliente android_vr", "youtube:player_client=android_vr", False),
     ]
