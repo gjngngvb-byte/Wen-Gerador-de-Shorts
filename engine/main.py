@@ -260,6 +260,16 @@ def health():
     return {"ok": True, "service": "WenClips Engine", "version": "0.1.0"}
 
 
+def process_url_job(job_id: str, url: str, folder: Path) -> None:
+    try:
+        set_job(job_id, status="downloading", progress=3, message="Obtendo o vídeo autorizado…")
+        source = download_youtube(url, folder)
+        process_job(job_id, source, folder)
+    except Exception as exc:
+        set_job(job_id, status="failed", progress=100, message="Não foi possível baixar ou processar o vídeo.", error=str(exc)[-1800:])
+        shutil.rmtree(folder, ignore_errors=True)
+
+
 @app.post("/api/jobs/url", status_code=202)
 def create_url_job(payload: UrlRequest, background: BackgroundTasks):
     url = validate_youtube_url(payload.url)
@@ -267,17 +277,8 @@ def create_url_job(payload: UrlRequest, background: BackgroundTasks):
     folder = JOB_DIR / job_id
     folder.mkdir(parents=True, exist_ok=True)
     with jobs_lock:
-        jobs[job_id] = {"id": job_id, "status": "downloading", "progress": 3, "message": "Obtendo o vídeo autorizado…", "clips": []}
-    try:
-        source = download_youtube(url, folder)
-    except Exception as exc:
-        shutil.rmtree(folder, ignore_errors=True)
-        with jobs_lock:
-            jobs.pop(job_id, None)
-        if isinstance(exc, HTTPException):
-            raise
-        raise HTTPException(status_code=422, detail=f"Não consegui obter o vídeo: {str(exc)[-900:]}")
-    background.add_task(process_job, job_id, source, folder)
+        jobs[job_id] = {"id": job_id, "status": "queued", "progress": 1, "message": "Trabalho adicionado à fila…", "clips": []}
+    background.add_task(process_url_job, job_id, url, folder)
     return {"id": job_id, "status": "queued", "status_url": f"/api/jobs/{job_id}"}
 
 
