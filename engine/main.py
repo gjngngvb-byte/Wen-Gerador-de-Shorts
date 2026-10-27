@@ -217,12 +217,25 @@ def download_youtube(url: str, folder: Path) -> Path:
         (folder / "source.mp4").unlink(missing_ok=True)
 
     details = " | ".join(failures[-5:])
+    combined_errors = " ".join(failures).lower()
+    youtube_requires_login = (
+        "error.api.youtube.login" in combined_errors
+        or "sign in to confirm you’re not a bot" in combined_errors
+        or "sign in to confirm you're not a bot" in combined_errors
+        or "login_required" in combined_errors
+        or "this request was detected as a bot" in combined_errors
+    )
+    if youtube_requires_login:
+        raise RuntimeError(
+            "O YouTube está exigindo autenticação e bloqueou o acesso automatizado a este vídeo. "
+            "O WenClips não consegue baixar esse conteúdo sem uma sessão autorizada. "
+            "Envie o arquivo de vídeo ou use um link direto de mídia que você tenha autorização para acessar. "
+            "Detalhes técnicos: " + details
+        )
     raise RuntimeError(
-        "Todos os métodos automáticos disponíveis falharam. "
-        "Streamlink é uma última tentativa apenas para transmissões ao vivo; "
-        "ele não oferece suporte a vídeos comuns sob demanda no YouTube. "
-        "Para este vídeo, use um arquivo que você tenha autorização para reutilizar "
-        "ou um link direto de mídia autorizado. Detalhes: " + details
+        "Não foi possível obter o vídeo pelos métodos automáticos disponíveis. "
+        "Envie um arquivo de vídeo que você tenha autorização para reutilizar "
+        "ou use um link direto de mídia autorizado. Detalhes: " + details
     )
 
 
