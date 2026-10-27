@@ -28,7 +28,10 @@ _model = None
 _model_lock = threading.Lock()
 
 app = FastAPI(title="WenClips Engine", version="0.1.0")
-origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",") if item.strip()]
+configured_origins = [item.strip() for item in os.getenv("ALLOWED_ORIGINS", "").split(",") if item.strip()]
+# Keep the deployed Render frontend allowed even if the dashboard env var is stale.
+required_origins = ["https://wenclips-web.onrender.com", "https://wen-gerador-de-shorts.vercel.app", "http://localhost:3000"]
+origins = list(dict.fromkeys(configured_origins + required_origins))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
