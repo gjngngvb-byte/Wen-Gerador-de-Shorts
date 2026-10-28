@@ -104,7 +104,11 @@ def download_youtube(url: str, folder: Path) -> Path:
     # never prevent a public video from being downloaded without authentication.
     profiles: list[tuple[str, str | None, bool]] = [
         ("padrão sem cookies", None, False),
-        # Try clients that currently use different YouTube playback paths.
+        # Current yt-dlp guidance recommends trying mweb alongside tv/web_safari.
+        # The PO-token provider only helps when extraction reaches the token stage;
+        # it cannot override an IP-level login requirement.
+        ("cliente mweb + tv + web_safari", "youtube:player_client=mweb,tv,web_safari", False),
+        ("cliente mweb", "youtube:player_client=mweb", False),
         ("cliente tv + web_safari", "youtube:player_client=tv,web_safari", False),
         ("cliente ios", "youtube:player_client=ios", False),
         ("cliente web_safari", "youtube:player_client=web_safari", False),
