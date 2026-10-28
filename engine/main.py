@@ -451,6 +451,58 @@ def render_clip(source: Path, folder: Path, index: int, clip: dict[str, Any], se
     return output
 
 
+
+def upload_clip_to_storage(job_id: str, output: Path) -> str | None:
+    """Upload generated clips to a private Supabase Storage bucket and return a 7-day signed URL.
+
+    The Supabase service-role key must exist only in the backend environment, never in the browser.
+    If storage is not configured, keep the current local-download behavior.
+    """
+    base_url = os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    service_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    bucket = os.getenv("SUPABASE_STORAGE_BUCKET", "wenclips-media").strip()
+    if not base_url or not service_key:
+        return None
+    if not base_url.startswith("https://") or not bucket:
+        raise RuntimeError("Configuração do armazenamento Supabase inválida.")
+
+    object_path = f"{job_id}/{output.name}"
+    headers = {
+        "apikey": service_key,
+        "Authorization": f"Bearer {service_key}",
+        "Content-Type": "video/mp4",
+        "x-upsert": "true",
+    }
+    upload_req = Request(
+        f"{base_url}/storage/v1/object/{bucket}/{object_path}",
+        data=output.read_bytes(), headers=headers, method="POST",
+    )
+    try:
+        with urlopen(upload_req, timeout=180) as response:
+            if response.status not in (200, 201):
+                raise RuntimeError(f"Upload Supabase retornou HTTP {response.status}.")
+        sign_payload = json.dumps({"expiresIn": 604800}).encode("utf-8")
+        sign_req = Request(
+            f"{base_url}/storage/v1/object/sign/{bucket}/{object_path}",
+            data=sign_payload,
+            headers={**headers, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(sign_req, timeout=30) as response:
+            signed = json.loads(response.read().decode("utf-8"))
+        signed_path = signed.get("signedURL") or signed.get("signedUrl")
+        if not isinstance(signed_path, str) or not signed_path:
+            raise RuntimeError("Supabase não retornou um link temporário para o clipe.")
+        if signed_path.startswith("http://") or signed_path.startswith("https://"):
+            return signed_path
+        return f"{base_url}/storage/v1{signed_path if signed_path.startswith('/') else '/' + signed_path}"
+    except HTTPError as exc:
+        detail = exc.read(500).decode("utf-8", errors="replace")
+        raise RuntimeError(f"Supabase Storage HTTP {exc.code}: {detail[:300]}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Não foi possível acessar o Supabase Storage: {str(exc)[:250]}") from exc
+
+
 def process_job(job_id: str, source: Path, folder: Path) -> None:
     try:
         set_job(job_id, status="processing", progress=8, message="Analisando duração do vídeo…")
@@ -463,9 +515,10 @@ def process_job(job_id: str, source: Path, folder: Path) -> None:
         for idx, clip in enumerate(clips, start=1):
             set_job(job_id, progress=48 + int((idx - 1) / len(clips) * 45), message=f"Renderizando clipe {idx} de {len(clips)}…")
             output = render_clip(source, folder, idx, clip, segments)
+            stored_url = upload_clip_to_storage(job_id, output)
             outputs.append({
                 "name": output.name,
-                "url": f"/api/jobs/{job_id}/files/{output.name}",
+                "url": stored_url or f"/api/jobs/{job_id}/files/{output.name}",
                 "start": round(clip["start"], 2),
                 "end": round(clip["end"], 2),
                 "duration": round(clip["end"] - clip["start"], 2),
