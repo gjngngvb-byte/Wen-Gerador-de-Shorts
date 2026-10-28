@@ -13,3 +13,9 @@ services:
         value: /tmp/wenclips
       - key: WHISPER_MODEL
         value: tiny
+      - key: SUPABASE_URL
+        value: https://cneehjubgbejojpikmhx.supabase.co
+      - key: SUPABASE_STORAGE_BUCKET
+        value: wenclips-media
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
