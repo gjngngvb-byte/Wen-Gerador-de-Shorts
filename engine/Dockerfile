@@ -1,13 +1,40 @@
 FROM python:3.11-slim
+
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates curl unzip && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh && rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core ca-certificates curl unzip \
+    && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade -r requirements.txt \
     && yt-dlp --version \
     && deno --version
+
+# Same local HTTP PO-token provider architecture used by MeTube.
+# Keep the unauthenticated provider bound to loopback, never publicly exposed.
+RUN set -eux; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) BGUTIL_ARCH="x86_64" ;; \
+      arm64) BGUTIL_ARCH="aarch64" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    BGUTIL_TAG="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest | sed 's#.*/tag/##')"; \
+    test -n "$BGUTIL_TAG"; \
+    curl -fL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-pot-linux-${BGUTIL_ARCH}" -o /usr/local/bin/bgutil-pot; \
+    chmod +x /usr/local/bin/bgutil-pot; \
+    PLUGIN_DIR="$(python -c 'import site; print(site.getsitepackages()[0])')"; \
+    curl -fL "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/download/${BGUTIL_TAG}/bgutil-ytdlp-pot-provider-rs.zip" -o /tmp/bgutil-provider.zip; \
+    unzip -q /tmp/bgutil-provider.zip -d "$PLUGIN_DIR"; \
+    rm /tmp/bgutil-provider.zip; \
+    bgutil-pot --help >/dev/null
+
 COPY main.py .
 RUN mkdir -p /tmp/wenclips
 ENV JOB_DIR=/tmp/wenclips WHISPER_MODEL=tiny
 EXPOSE 8000
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Wait for the provider's ping endpoint before accepting download jobs.
+CMD ["sh", "-c", "bgutil-pot server > /tmp/bgutil-pot.log 2>&1 & echo $! > /tmp/bgutil-pot.pid; n=0; until curl -fsS http://127.0.0.1:4416/ping >/dev/null; do n=$((n+1)); if [ $n -ge 30 ]; then echo 'bgutil POT provider did not become ready:'; cat /tmp/bgutil-pot.log; exit 1; fi; sleep 1; done; echo 'bgutil POT provider ready on loopback'; exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
