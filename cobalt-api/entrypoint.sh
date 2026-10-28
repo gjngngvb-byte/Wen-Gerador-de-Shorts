@@ -26,17 +26,19 @@ const p = "/app/cobalt/api/src/processing/helpers/youtube-session.js";
 let s = fs.readFileSync(p, "utf8");
 const oldUrl = 'sessionServerUrl.pathname = "/get_pot";';
 const oldParse = "const newSession = await fetch(\n        sessionServerUrl,\n        { method: 'POST', dispatcher: defaultAgent }\n    ).then(a => a.json());";
-const newParse = "const response = await fetch(sessionServerUrl, { method: 'GET', dispatcher: defaultAgent });\\n" +
-    "    if (!response.ok) {\\n" +
-    "        throw new Error('session generator returned HTTP ' + response.status);\\n" +
-    "    }\\n" +
-    "    const rawSession = await response.json();\\n" +
-    "    const newSession = {\\n" +
-    "        ...rawSession,\\n" +
-    "        potoken: rawSession.potoken ?? rawSession.po_token ?? rawSession.poToken,\\n" +
-    "        visitor_data: rawSession.visitor_data ?? rawSession.visitorData,\\n" +
-    "        updated: rawSession.updated ?? Date.now(),\\n" +
-    "    };";
+const newParse = [
+    "const response = await fetch(sessionServerUrl, { method: 'GET', dispatcher: defaultAgent });",
+    "    if (!response.ok) {",
+    "        throw new Error('session generator returned HTTP ' + response.status);",
+    "    }",
+    "    const rawSession = await response.json();",
+    "    const newSession = {",
+    "        ...rawSession,",
+    "        potoken: rawSession.potoken ?? rawSession.po_token ?? rawSession.poToken,",
+    "        visitor_data: rawSession.visitor_data ?? rawSession.visitorData,",
+    "        updated: rawSession.updated ?? Date.now(),",
+    "    };",
+].join(String.fromCharCode(10));
 if (s.includes(oldUrl) && s.includes(oldParse)) {
   s = s.replace(oldUrl, 'sessionServerUrl.pathname = "/token";')
        .replace(oldParse, newParse);
