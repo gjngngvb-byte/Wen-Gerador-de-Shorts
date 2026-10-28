@@ -14,9 +14,8 @@ RUN pip install --no-cache-dir --upgrade -r requirements.txt \
     && yt-dlp --version \
     && deno --version
 
-# Install the same local HTTP PO-token provider used by MeTube.
-# The provider and yt-dlp run in this container, so localhost is valid and
-# the unauthenticated token-generation API is never exposed publicly.
+# Same local HTTP PO-token provider architecture used by MeTube.
+# Keep the unauthenticated provider bound to loopback, never publicly exposed.
 RUN set -eux; \
     case "${TARGETARCH:-amd64}" in \
       amd64) BGUTIL_ARCH="x86_64" ;; \
@@ -37,6 +36,5 @@ COPY main.py .
 RUN mkdir -p /tmp/wenclips
 ENV JOB_DIR=/tmp/wenclips WHISPER_MODEL=tiny
 EXPOSE 8000
-# Start the provider on loopback, then the public API. The provider's plugin
-# defaults to http://127.0.0.1:4416.
-CMD ["sh", "-c", "bgutil-pot server > /tmp/bgutil-pot.log 2>&1 & echo $! > /tmp/bgutil-pot.pid; exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+# Wait for the provider's ping endpoint before accepting download jobs.
+CMD ["sh", "-c", "bgutil-pot server > /tmp/bgutil-pot.log 2>&1 & echo $! > /tmp/bgutil-pot.pid; n=0; until curl -fsS http://127.0.0.1:4416/ping >/dev/null; do n=$((n+1)); if [ $n -ge 30 ]; then echo 'bgutil POT provider did not become ready:'; cat /tmp/bgutil-pot.log; exit 1; fi; sleep 1; done; echo 'bgutil POT provider ready on loopback'; exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
