@@ -23,7 +23,7 @@ STATE_KEY = "state/shorts-queue.json"
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 MAX_CLIP_SECONDS = 58
 MIN_CLIP_SECONDS = 25
-MAX_DAILY = 3
+MAX_DAILY = 1
 
 
 def log(message: str) -> None:
