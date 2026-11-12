@@ -43,7 +43,7 @@ In Google Cloud Console:
 2. Configure the OAuth consent screen.
 3. Create an OAuth client of type **Desktop app**.
 4. Add the OAuth client ID and secret to GitHub Actions secrets as `YOUTUBE_CLIENT_ID` and `YOUTUBE_CLIENT_SECRET`.
-5. Generate a refresh token locally with the Google OAuth flow using the scope `https://www.googleapis.com/auth/youtube.upload`, then save it as `YOUTUBE_REFRESH_TOKEN` in GitHub Actions secrets.
+5. Save the downloaded OAuth Desktop JSON locally as `automation/client_secret.json` (never commit it). Install `pip install google-auth-oauthlib`, then run `python automation/get_youtube_refresh_token.py`. Copy the printed refresh token into GitHub Actions secret `YOUTUBE_REFRESH_TOKEN`.
 
 Never commit client secrets, refresh tokens, or R2 credentials. Keep the Google OAuth app in an appropriate publishing status for your account.
 
